@@ -1,0 +1,34 @@
+Copyright 1986-2022 Xilinx, Inc. All Rights Reserved. Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
+---------------------------------------------------------------------------------------------------------------------------------------------
+| Tool Version : Vivado v.2026.1 (win64) Build 6511674 Tue Jun 16 11:02:23 MDT 2026
+| Date         : Fri Oct 16 11:12:27 2026
+| Host         : Matheus running 64-bit major release  (build 9200)
+| Command      : report_utilization -hierarchical -file C:/FPGA/posit-multiplier-vhdl/vivado/synth/reports/utilization_hier.rpt
+| Design       : posit_mul_synth_wrapper
+| Device       : xc7vx485tffg1157-1
+| Speed File   : -1
+| Design State : Routed
+---------------------------------------------------------------------------------------------------------------------------------------------
+
+Utilization Design Information
+
+Table of Contents
+-----------------
+1. Utilization by Hierarchy
+
+1. Utilization by Hierarchy
+---------------------------
+
++------------------------------+-------------------------+------------+------------+---------+------+-----+--------+--------+------------+
+|           Instance           |          Module         | Total LUTs | Logic LUTs | LUTRAMs | SRLs | FFs | RAMB36 | RAMB18 | DSP Blocks |
++------------------------------+-------------------------+------------+------------+---------+------+-----+--------+--------+------------+
+| posit_mul_synth_wrapper      |                   (top) |        986 |        986 |       0 |    0 |  36 |      0 |      0 |          0 |
+|   (posit_mul_synth_wrapper)  |                   (top) |          0 |          0 |       0 |    0 |  36 |      0 |      0 |          0 |
+|   dut                        |    posit_multiplier_top |        986 |        986 |       0 |    0 |   0 |      0 |      0 |          0 |
+|     decoderB_inst            |         decoder_posit_0 |        380 |        380 |       0 |    0 |   0 |      0 |      0 |          0 |
+|     mantissa_multiplier_inst |     mantissa_multiplier |         85 |         85 |       0 |    0 |   0 |      0 |      0 |          0 |
+|     posit_packing_inst       | posit_component_packing |        514 |        514 |       0 |    0 |   0 |      0 |      0 |          0 |
++------------------------------+-------------------------+------------+------------+---------+------+-----+--------+--------+------------+
+* Note: The sum of lower-level cells may be larger than their parent cells total, due to cross-hierarchy LUT combining
+
+
