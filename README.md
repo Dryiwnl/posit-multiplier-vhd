@@ -1,131 +1,244 @@
+
 # posit-multiplier-vhdl
 
-An 8-bit **Posit (es = 1) multiplier**, implemented in VHDL-2008 and verified exhaustively using GHDL and an independent Python reference model. The design was synthesised, placed and routed in AMD Vivado 2026.1 for a Xilinx Virtex-7 FPGA.
+An **8-bit Posit multiplier (`es = 1`)** written in VHDL-2008, exhaustively verified against an independent Python reference model using GHDL, and synthesized, placed and routed in AMD Vivado 2026.1 for a Xilinx Virtex-7 FPGA.
+
+The implementation includes Posit decoding, sign and exponent processing, mantissa multiplication, normalization, packing and rounding. All 65,536 possible input pairs have been verified with no mismatches.
 
 **Author:** [Matheus Viganó Schirrmann](https://github.com/Dryiwnl)  
 **Institution:** Universidade Federal de Santa Catarina (UFSC) — ProtoFPGA
 
 ## Architecture
 
+The complete multiplier consists of a combinational datapath:
+
 ```text
-             positA                          positB
-                │                               │
-                ▼                               ▼
-        ┌──────────────┐                ┌──────────────┐
-        │   Decoder A  │                │   Decoder B  │
-        └──────┬───────┘                └───────┬──────┘
-               │                                │
-       ┌───────┴────────┐              ┌────────┴───────┐
-       │                │              │                │
-       ▼                │              │                ▼
-   Fraction A           └──────┬───────┘           Fraction B
-       │                       │                        │
-       │                       ▼                        │
-       │            ┌────────────────────┐              │
-       │            │ Sign and Exponent  │              │
-       │            │ Processing Unit    │              │
-       │            └─────────┬──────────┘              │
-       │                      │                         │
-       ▼                      │                         ▼
-       └───────────┐          │          ┌──────────────┘
-                   ▼          │          ▼
-               ┌───────────────────────────┐
-               │    Mantissa Multiplier    │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │       Normalization       │◀── Regime/Exp
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │     Posit Packing         │
-               │  Regime | Exp | Fraction  │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │     Rounding + Sign       │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-               ┌───────────────────────────┐
-               │     Zero / NaR Handling   │
-               └─────────────┬─────────────┘
-                             │
-                             ▼
-                         positResult
+          positA                         positB
+             |                              |
+             v                              v
+       +-----------+                  +-----------+
+       | Decoder A |                  | Decoder B |
+       +-----+-----+                  +-----+-----+
+             |                              |
+             +---------------+--------------+
+                             |
+                 +-----------+-----------+
+                 |                       |
+                 v                       v
+       +-------------------+   +-------------------+
+       | Sign and Exponent |   |     Mantissa      |
+       |  Processing Unit  |   |    Multiplier     |
+       +---------+---------+   +---------+---------+
+                 |                       |
+                 |                       v
+                 |             +-------------------+
+                 |             |   Normalization   |
+                 |             +---------+---------+
+                 |                       |
+                 +-----------+-----------+
+                             |
+                             v
+                 +-----------------------+
+                 |  Posit Component      |
+                 |       Packing         |
+                 +-----------+-----------+
+                             |
+                             v
+                 +-----------------------+
+                 |    Posit Rounding     |
+                 |   and Sign Handling   |
+                 +-----------+-----------+
+                             |
+                             v
+                 +-----------------------+
+                 |  Zero / NaR Handling  |
+                 +-----------+-----------+
+                             |
+                             v
+                        positResult
 ```
 
-The architecture is combinational. The top-level module integrates seven VHDL components:
+The hardware is divided into seven VHDL modules:
 
-| Module | Function |
+| Module | Description |
 |---|---|
-| `decoder_posit.vhd` | Extracts sign, regime, exponent and fraction |
-| `sign_and_exponent_PU.vhd` | Computes output sign, regime and exponent |
-| `mantissa_multiplier.vhd` | Performs unsigned mantissa multiplication |
+| `decoder_posit.vhd` | Extracts the sign, regime, exponent and fraction |
+| `sign_and_exponent_PU.vhd` | Computes the sign, regime and exponent of the product |
+| `mantissa_multiplier.vhd` | Multiplies the input significands |
 | `normalization.vhd` | Normalizes the product and adjusts its scale |
-| `posit_component_packing.vhd` | Packs the Posit fields and handles saturation |
-| `posit_rounding.vhd` | Applies round-to-nearest, ties-to-even |
-| `posit_multiplier_top.vhd` | Connects the complete datapath and handles zero/NaR |
+| `posit_component_packing.vhd` | Reconstructs the Posit representation and handles saturation |
+| `posit_rounding.vhd` | Implements round-to-nearest, ties-to-even and sign application |
+| `posit_multiplier_top.vhd` | Integrates the modules and handles zero and NaR |
 
-Detailed schematics:
+The RTL and post-synthesis schematics generated by Vivado are available in:
 
 - [RTL architecture](docs/figures/rtl_architecture.pdf)
 - [Post-synthesis schematic](docs/figures/post_synthesis_schematic.pdf)
 
 ## How Posit multiplication works
 
-For Posit(8,1), a nonzero finite number can be expressed as
+### Posit representation
 
-\[
-x=(-1)^s \times 4^k \times 2^e \times (1+f)
-\]
+Unlike IEEE-754 floating-point numbers, Posit numbers use a variable-length regime field in addition to the sign, exponent and fraction.
+
+A nonzero, non-NaR Posit number is represented by:
+
+```text
+x = (-1)^s * useed^k * 2^e * (1+f)
+```
 
 where:
 
-- \(s\) is the sign bit;
-- \(k\) is the regime value;
-- \(e\) is the exponent (`es = 1`);
-- \(f\) is the fractional significand.
+- `s` is the sign bit;
+- `k` is the regime value;
+- `e` is the exponent;
+- `f` is the fractional part of the significand.
 
-Multiplication can be decomposed into three independent operations.
+The value of `useed` depends on the exponent-size parameter:
 
-**Sign:**
+```text
+useed = 2^(2^es)
+```
 
-\[
-s_y=s_a\oplus s_b
-\]
+For Posit(8,1), `es = 1`, so:
 
-**Scale:**
+```text
+useed = 4
 
-\[
-k_y=k_a+k_b+\left\lfloor\frac{e_a+e_b}{2}\right\rfloor
-\]
+x = (-1)^s * 4^k * 2^e * (1+f)
+```
 
-\[
-e_y=(e_a+e_b)\bmod 2
-\]
+The variable-length regime allows Posit numbers to represent a wide dynamic range while concentrating precision around values close to one.
 
-**Mantissa:**
+### Multiplication
 
-\[
-M_y=(1+f_a)(1+f_b)
-\]
+Given two Posit operands:
 
-Each mantissa has an implicit leading 1. The hardware uses a 5×5-bit unsigned multiplier, producing a 10-bit result.
+```text
+x_a = (-1)^s_a * 4^k_a * 2^e_a * (1+f_a)
 
-If the product is at least 2, normalization shifts the significand to the right and increments the exponent, propagating any exponent carry into the regime.
+x_b = (-1)^s_b * 4^k_b * 2^e_b * (1+f_b)
+```
 
-The normalized result is packed into Posit format and rounded using **round-to-nearest, ties-to-even**. Zero and NaR are handled at the top level.
+Their product is:
 
-Unlike logarithmic arithmetic, Posit multiplication requires a mantissa multiplier in addition to sign and scale processing.
+```text
+x_y = x_a * x_b
+
+    = (-1)^(s_a+s_b)
+      * 4^(k_a+k_b)
+      * 2^(e_a+e_b)
+      * (1+f_a)(1+f_b)
+```
+
+The multiplication is divided into three operations: sign processing, scale computation and significand multiplication.
+
+**Sign**
+
+The sign of the product is determined by XOR:
+
+```text
+s_y = s_a xor s_b
+```
+
+Equal signs produce a positive result, while different signs produce a negative result.
+
+**Scale**
+
+The regime and exponent determine the scale of each operand.
+
+For Posit(8,1), the intermediate regime and exponent, before normalization, are:
+
+```text
+k_raw = k_a + k_b + floor((e_a + e_b)/2)
+
+e_raw = (e_a + e_b) mod 2
+```
+
+Normalization can introduce an additional exponent carry, which may propagate into the regime.
+
+**Mantissa multiplication**
+
+The significands contain an implicit leading one:
+
+```text
+M_a = 1 + f_a
+
+M_b = 1 + f_b
+```
+
+The product is:
+
+```text
+M_y = M_a * M_b
+```
+
+The implementation uses two 5-bit significands, generating a 10-bit intermediate product.
+
+Since:
+
+```text
+1 <= M_a < 2
+1 <= M_b < 2
+
+1 <= M_y < 4
+```
+
+the product may require normalization.
+
+If the significand product is greater than or equal to two, it is shifted right and the scale is incremented.
+
+The normalized result is then passed to the packing and rounding stages.
+
+### Packing and rounding
+
+The packing module reconstructs the Posit bit pattern using the calculated regime, exponent and normalized fraction.
+
+Because the regime has variable length, the number of available fraction bits depends on the magnitude of the result.
+
+The rounding stage implements **round-to-nearest, ties-to-even**, using information from discarded bits to determine whether the encoded magnitude must be incremented.
+
+Rounding occurs before the sign is applied to the encoded result.
+
+The implementation also handles saturation at the representable extremes.
+
+### Special values
+
+Posit(8,1) has two special bit patterns:
+
+| Value | Binary encoding | Hexadecimal |
+|---|---|---|
+| Zero | `00000000` | `0x00` |
+| NaR (Not a Real) | `10000000` | `0x80` |
+
+The top-level module applies the following rules:
+
+```text
+NaR * x  = NaR
+
+0 * x    = 0, if x is not NaR
+```
+
+NaR has priority over zero.
+
+Unlike logarithmic Takum multiplication, Posit multiplication requires a significand multiplier in addition to sign and scale processing.
+
+## Vivado simulation
+
+The multiplier was simulated in Vivado using representative 8-bit operand combinations.
+
+The waveform shows both input operands and the resulting Posit product, displayed in hexadecimal alongside the individual result bits.
+
+![Vivado simulation waveform](docs/figures/waveform.png)
+
+[Open the waveform image](docs/figures/waveform.png)
+
+The waveform was generated using the integrated VHDL multiplier testbench.
 
 ## Repository layout
 
 ```text
-rtl/                          VHDL arithmetic hardware
+rtl/                         VHDL arithmetic hardware
 ├── decoder_posit.vhd
 ├── sign_and_exponent_PU.vhd
 ├── mantissa_multiplier.vhd
@@ -134,10 +247,10 @@ rtl/                          VHDL arithmetic hardware
 ├── posit_rounding.vhd
 └── posit_multiplier_top.vhd
 
-verification/                 Functional verification
-├── posit_reference.py        Independent Python reference
-├── results.txt               Exhaustive simulation output
-└── tb/                       Module and top-level testbenches
+verification/                Functional verification
+├── posit_reference.py       Independent Python reference model
+├── results.txt              Exhaustive verification results
+└── tb/                      VHDL testbenches
     ├── tb_decoder_posit.vhd
     ├── tb_sign_and_exponent_PU.vhd
     ├── tb_mantissa_multiplier.vhd
@@ -147,28 +260,54 @@ verification/                 Functional verification
     ├── tb_posit_multiplier_top.vhd
     └── tb_posit_exhaustive.vhd
 
-vivado/
+vivado/                      FPGA synthesis and implementation
 └── synth/
-    ├── build.tcl             Automated synthesis and implementation
+    ├── build.tcl            Automated Vivado implementation script
     ├── posit_mul_synth_wrapper.vhd
     ├── README.md
-    └── reports/              Area, timing and power reports
+    └── reports/
+        ├── utilization.rpt
+        ├── utilization_hier.rpt
+        ├── timing.rpt
+        ├── paths.rpt
+        └── power.rpt
 
-docs/
-└── figures/                  Vivado RTL and synthesis schematics
+docs/                        Technical diagrams
+└── figures/
+    ├── rtl_architecture.pdf
+    ├── post_synthesis_schematic.pdf
+    └── waveform.png
+
+README.md
 ```
 
 ## Quick start
 
-**Requirements:** Python 3, GHDL with VHDL-2008 support, and Vivado for FPGA implementation.
+### Requirements
 
-From the repository root, generate the expected results:
+The verification environment uses:
+
+- Python 3.12.6
+- GHDL 6.0.0
+- VHDL-2008
+
+AMD Vivado 2026.1 is required to reproduce the FPGA implementation.
+
+### Reference model
+
+The independent Python model calculates the expected multiplication results for all 8-bit Posit operand pairs.
+
+From the repository root:
 
 ```bash
 python verification/posit_reference.py
 ```
 
-Compile the RTL in dependency order:
+The reference vectors are used by the exhaustive VHDL testbench.
+
+### GHDL verification
+
+Compile the VHDL modules in dependency order:
 
 ```bash
 ghdl -a --std=08 rtl/decoder_posit.vhd
@@ -180,152 +319,241 @@ ghdl -a --std=08 rtl/posit_rounding.vhd
 ghdl -a --std=08 rtl/posit_multiplier_top.vhd
 ```
 
-Run the exhaustive verification:
+Compile and elaborate the exhaustive testbench:
 
 ```bash
 ghdl -a --std=08 verification/tb/tb_posit_exhaustive.vhd
 ghdl -e --std=08 tb_posit_exhaustive
+```
+
+Run it with the reference-vector file in the location expected by the testbench:
+
+```bash
 ghdl -r --std=08 tb_posit_exhaustive
 ```
 
-Expected result:
-
-```text
-TOTAL=65536 CORRECT=65536 ERRORS=0
-simulation finished @65536ns
-```
+The testbench compares the multiplier output against the Python reference for every operand pair.
 
 ## Verification
 
-The Python reference model independently decodes Posit bit patterns, computes the expected products and encodes the nearest representable results.
+The reference model is independent of the VHDL implementation.
 
-Every possible pair of 8-bit operands is tested:
+It determines the expected result for each operand pair according to the Posit(8,1) representation and rounding rules.
 
-\[
-2^8 \times 2^8 = 65\,536
-\]
+For two 8-bit operands:
 
-| Test | Inputs | Result |
-|---|---:|---|
-| Full Posit multiplication | 65,536 pairs | No mismatches |
-| Zero and NaR | Included in exhaustive verification | Passed |
-| Positive and negative operands | Included in exhaustive verification | Passed |
-| Rounding and saturation | Included in exhaustive verification | Passed |
-| Vivado waveform testbench | 10 representative cases | Passed |
+```text
+Number of values per operand = 2^8 = 256
 
-**Exhaustive verification result: 65,536 / 65,536 correct.**
+Total operand pairs = 256 * 256 = 65,536
+```
 
-[Full verification log](verification/results.txt)
+Every possible operand pair was tested.
 
-### Vivado simulation waveform
+| Test | Inputs | Width | Result |
+|---|---:|---|---|
+| Complete multiplier, exhaustive | 65,536 pairs | 8 bits | No mismatches |
+| Positive and negative operands | Included | 8 bits | Passed |
+| Zero and NaR | Included | 8 bits | Passed |
+| Extreme representable values | Included | 8 bits | Passed |
+| Rounding cases | Included | 8 bits | Passed |
+| Vivado waveform demonstration | 10 cases | 8 bits | Simulated |
 
-Representative multiplication cases were simulated in Vivado using `tb_posit_multiplier_top.vhd`. The waveform displays the 8-bit Posit operands and result.
+### Exhaustive results
 
-<!-- Add the screenshot after uploading docs/images/vivado_waveform.png -->
+| Metric | Result |
+|---|---:|
+| Total operand pairs | **65,536** |
+| Correct results | **65,536** |
+| Mismatches | **0** |
+| Operand-pair coverage | **100%** |
+
+```text
+TOTAL   = 65536
+CORRECT = 65536
+ERRORS  = 0
+```
+
+The exhaustive test produced no mismatches.
+
+[Full verification results](verification/results.txt)
 
 ## Synthesis and implementation
 
-The full Posit(8,1) multiplier was implemented using the following configuration:
+The complete Posit(8,1) multiplier was synthesized, placed and routed using AMD Vivado 2026.1.
+
+A registered wrapper was added around the combinational arithmetic circuit to measure input-to-output timing with a defined clock constraint.
+
+### Implementation configuration
 
 | Parameter | Configuration |
 |---|---|
-| FPGA | Virtex-7 `xc7vx485tffg1157-1` |
-| Tool | Vivado 2026.1 |
-| Clock constraint | 10 ns |
+| FPGA family | Xilinx Virtex-7 |
+| Device | `xc7vx485tffg1157-1` |
+| Vivado version | 2026.1 |
+| Arithmetic format | Posit(8,1) |
 | Synthesis | Out-of-context |
+| Implementation | Placement and routing |
+| Clock constraint | 10 ns |
 | Measurement | Registered input/output wrapper |
-| Implementation | Placed and routed |
 | Internal pipelining | None |
 
 ### Resource utilization
+
+Post-implementation resource utilization:
 
 | Resource | Used |
 |---|---:|
 | Slice LUTs | **986** |
 | CARRY4 | **163** |
 | DSP blocks | **0** |
-| Flip-flops | 36 |
-| Block RAM | 0 |
-| Slices | 281 |
+| Flip-flops | **36** |
+| Block RAM | **0** |
+| Slices | **281** |
 
-The 36 flip-flops belong to the measurement wrapper. The arithmetic datapath itself is combinational.
+The 36 flip-flops belong to the measurement wrapper, not to the combinational multiplier core.
 
-### Timing results
+The implementation uses LUTs and carry-chain resources for arithmetic, without dedicated DSP blocks.
+
+Reports:
+
+- [Resource utilization](vivado/synth/reports/utilization.rpt)
+- [Hierarchical utilization](vivado/synth/reports/utilization_hier.rpt)
+
+### Timing analysis
+
+The implementation used a 10 ns clock constraint, corresponding to a target frequency of 100 MHz.
 
 | Metric | Result |
 |---|---:|
 | Clock constraint | 10.000 ns |
-| Worst Negative Slack | −3.544 ns |
-| Estimated critical period | **13.544 ns** |
-| Estimated maximum frequency | **73.8 MHz** |
-| Logic levels | 28 |
-| Data-path delay | 13.510 ns |
+| Worst Negative Slack (WNS) | **−3.544 ns** |
+| Estimated minimum period | **13.544 ns** |
+| Estimated Fmax | **73.8 MHz** |
+| Worst data-path delay | 13.510 ns |
+| Critical-path logic levels | 28 |
 
-The critical path crosses the full arithmetic datapath between an input register and an output register.
+The minimum period is estimated using:
 
-The path delay consists of approximately 24% logic delay and 76% routing delay.
+```text
+T_min = T_constraint - WNS
 
-Since the 10 ns constraint was not met, Fmax was estimated from the post-route setup slack:
+T_min = 10 - (-3.544)
 
-\[
-F_{\max}=\frac{1000}{10-(-3.544)}
-\approx73.8\text{ MHz}
-\]
+T_min = 13.544 ns
+```
+
+The estimated maximum frequency is:
+
+```text
+Fmax = 1000 / T_min
+
+Fmax = 1000 / 13.544
+
+Fmax = 73.8 MHz
+```
+
+The implementation **does not meet the original 100 MHz timing constraint**.
+
+The worst data path contains:
+
+| Component | Delay |
+|---|---:|
+| Logic | 3.189 ns |
+| Routing | 10.321 ns |
+| Total | 13.510 ns |
+
+Approximately 76% of the reported data-path delay comes from routing.
+
+The estimated Fmax refers to the full registered measurement path and depends on the FPGA, timing constraints and routing.
+
+Reports:
+
+- [Timing summary](vivado/synth/reports/timing.rpt)
+- [Critical paths](vivado/synth/reports/paths.rpt)
 
 ### Power estimation
+
+Vivado reported the following power estimates:
 
 | Component | Estimated power |
 |---|---:|
 | Dynamic power | **24 mW** |
-| Device static power | 241 mW |
-| Total on-chip power | 265 mW |
-| Overall confidence | Medium |
+| Device static power | **241 mW** |
+| Total on-chip power | **265 mW** |
+| Confidence level | Medium |
 
-Power was estimated using Vivado vectorless activity propagation. No simulation switching-activity file was supplied, so these figures are estimates rather than physical measurements.
+The dynamic-power estimate includes the measurement implementation.
 
-Detailed results:
+Power was estimated using Vivado vectorless activity propagation without an externally supplied switching-activity file.
 
-- [Resource utilization](vivado/synth/reports/utilization.rpt)
-- [Hierarchical utilization](vivado/synth/reports/utilization_hier.rpt)
-- [Timing summary](vivado/synth/reports/timing.rpt)
-- [Critical paths](vivado/synth/reports/paths.rpt)
-- [Power report](vivado/synth/reports/power.rpt)
+These values are estimates, not physical FPGA measurements.
 
-The measurement wrapper and automated synthesis script are available in [`vivado/synth/`](vivado/synth/).
+[Full power report](vivado/synth/reports/power.rpt)
+
+### Reproducing synthesis
+
+The automated synthesis and implementation files are available in [`vivado/synth/`](vivado/synth/).
+
+```text
+build.tcl
+posit_mul_synth_wrapper.vhd
+reports/
+```
+
+The Tcl script performs out-of-context synthesis, placement, routing and report generation.
+
+It can be executed through Vivado's Tcl interface in the configured environment.
+
+The resulting utilization, timing and power reports may vary with the Vivado version, device, constraints and implementation settings.
 
 ## Status and next steps
 
-The Posit(8,1) multiplier has been implemented and exhaustively verified for all 65,536 operand pairs.
+The Posit(8,1) multiplier is functionally verified and implemented on the selected Virtex-7 target.
 
-Completed:
+**Completed:**
 
-- RTL implementation of all seven modules.
-- Module-level and integrated testbenches.
+- VHDL implementation of all seven modules.
+- Posit decoding and special-value handling.
+- Sign and exponent processing.
+- Mantissa multiplication and normalization.
+- Packing and round-to-nearest, ties-to-even.
+- Individual module testbenches.
+- Integrated multiplier testbench.
 - Independent Python reference model.
-- Exhaustive functional verification with no mismatches.
-- Vivado synthesis and routed implementation.
-- Resource utilization, critical-path and power estimation reports.
+- Exhaustive verification of 65,536 operand pairs.
+- Vivado waveform simulation.
+- FPGA synthesis, placement and routing.
+- Resource utilization analysis.
+- Post-route timing analysis.
+- Power estimation.
 
-Planned work includes improving the hardware implementation, extending the technical documentation and carrying out a controlled comparison with alternative numerical formats.
+**Next steps:**
+
+- Optimize LUT utilization and critical-path delay.
+- Investigate routing and arithmetic bottlenecks.
+- Compare Posit, IEEE-754 and Takum implementations under consistent experimental conditions.
+- Extend the multiplier to other Posit configurations.
+- Complete the Portuguese technical documentation.
 
 ## Documentation
 
-- [RTL architecture](docs/figures/rtl_architecture.pdf) — RTL-level schematic.
-- [Post-synthesis schematic](docs/figures/post_synthesis_schematic.pdf) — synthesised hardware structure.
-- [Verification results](verification/results.txt) — exhaustive test summary.
-- [Vivado implementation reports](vivado/synth/reports) — utilization, timing and power.
-
-Technical documentation in Portuguese following ABNT formatting is being developed separately.
+- [RTL architecture](docs/figures/rtl_architecture.pdf) — Vivado RTL schematic.
+- [Post-synthesis schematic](docs/figures/post_synthesis_schematic.pdf) — hardware after synthesis and optimization.
+- [Vivado waveform](docs/figures/waveform.png) — functional simulation.
+- [Verification results](verification/results.txt) — exhaustive verification log.
+- [Vivado implementation reports](vivado/synth/reports/) — utilization, timing, critical paths and power.
 
 ## References
 
-1. J. L. Gustafson and I. T. Yonemoto, *Beating Floating Point at Its Own Game: Posit Arithmetic*, Supercomputing Frontiers and Innovations, 2017.
-2. H. Zhang and S.-B. Ko, *Efficient Multiple-Precision Posit Multiplier*, IEEE International Symposium on Circuits and Systems (ISCAS), 2021.
+1. GUSTAFSON, John L.; YONEMOTO, Isaac T. *Beating Floating Point at Its Own Game: Posit Arithmetic*. Supercomputing Frontiers and Innovations, 2017.
+
+2. ZHANG, Hao; KO, Seok-Bum. *Efficient Multiple-Precision Posit Multiplier*. IEEE International Symposium on Circuits and Systems (ISCAS), 2021.
 
 ## Author
 
 **Matheus Viganó Schirrmann**  
-Computer Engineering — Universidade Federal de Santa Catarina  
+Computer Engineering — Universidade Federal de Santa Catarina (UFSC)  
 ProtoFPGA — Araranguá, Santa Catarina, Brazil
 
 2026
