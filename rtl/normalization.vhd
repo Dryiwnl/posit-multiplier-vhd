@@ -1,9 +1,10 @@
+
 --
 -- Normalization After Mantissa Multiplication - Posit (8,1)
 --
 -- Engineer: Matheus Viganó Schirrmann
 -- Creation date: 18/09/2026
--- Last modification: 25/09/2026
+-- Last modification: 16/10/2026
 --
 
 library ieee;
@@ -37,19 +38,41 @@ architecture arch of normalization is
 begin
 
     process(mantissaResult, kResult, exponentResult)
+
+        variable mantissa_aux : std_logic_vector(9 downto 0);
+
     begin
-        kResultNormalized <= kresult;
+        kResultNormalized <= kResult;
         exponentResultNormalized <= exponentResult;
+
         if mantissaResult(9) = '1' then
-            mantissaNormalized <= std_logic_vector(
+
+            mantissa_aux := std_logic_vector(
                 shift_right(unsigned(mantissaResult), 1)
             );
+
+            -- Correção:
+            -- O shift descarta mantissaResult(0).
+            -- Esse bit pode contribuir para o Sticky Bit.
+            --
+            -- Como o bit 9 fica livre após o shift,
+            -- ele será utilizado para preservar o bit perdido.
+            --
+            -- Bits 8 downto 0: mantissa normalizada.
+            -- Bit 9: bit descartado pelo deslocamento.
+
+            mantissa_aux(9) := mantissaResult(0);
+
+            mantissaNormalized <= mantissa_aux;
             normalizationCarry <= '1';
+
         else
+
             mantissaNormalized <= mantissaResult;
             normalizationCarry <= '0';
+
         end if;
-        
+
 -- Seguindo a mesma lógica da notação científica em base 10, ao normalizar a mantissa
 -- através de um shift de 1 bit, um fator de 2^1 deve ser compensado na escala.
 --
@@ -59,22 +82,24 @@ begin
 -- se for 1 e o expoente for 1 -> como o expoente possui apenas 1 bit, 1 + 1 gera
 -- expoente 0 e carry. Esse carry é então passado para o ajuste "grosso" da escala,
 -- incrementando k em 1.
+
         case mantissaResult(9) is
-            when '0' => 
+            when '0' =>
                 kResultNormalized <= kResult;
                 exponentResultNormalized <= exponentResult;
-            
+
             when '1' =>
                 if exponentResult = '0' then
                     exponentResultNormalized <= '1';
-                 else 
+                else
                     exponentResultNormalized <= '0';
                     kResultNormalized <= kResult + 1;
                 end if;
-             when others =>
-             null;
+
+            when others =>
+                null;
         end case;
-        
+
     end process;
 
 end architecture;
