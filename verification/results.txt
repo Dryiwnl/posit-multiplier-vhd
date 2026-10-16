@@ -1,0 +1,4 @@
+﻿../../src/ieee2008/numeric_std-body.vhdl:3079:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+../../src/ieee2008/numeric_std-body.vhdl:3079:7:@0ms:(assertion warning): NUMERIC_STD.TO_INTEGER: metavalue detected, returning 0
+.\verification\tb_posit_exhaustive.vhd:50:9:@65536ns:(report note): TOTAL=65536 CORRECT=65536 ERRORS=0
+simulation finished @65536ns
